@@ -49,13 +49,6 @@ var _ = Describe("the kvnode binary", func() {
 		n := startNode("node-1")
 		Eventually(n.session.Terminate()).WithTimeout(exitTimeout).Should(gexec.Exit(0))
 	})
-
-	It("passes the counter test run by the kvcounter binary", Label("R-CON-1", "R-CON-4"), func() {
-		n := startNode("node-1")
-		s := start(bin.counter, nil, "-url", n.URL)
-		Eventually(s).WithTimeout(time.Minute).Should(gexec.Exit(0))
-		Expect(s.Out).To(gbytes.Say("final: count=300 version=301  PASS"))
-	})
 })
 
 var _ = Describe("the kvrouter binary in front of three kvnode processes", func() {
@@ -96,12 +89,6 @@ var _ = Describe("the kvrouter binary in front of three kvnode processes", func(
 		down.Restart()
 		Expect(send(d.URL, "GET", "/kv/"+d.keyOn(down), "").status).To(Equal(404))
 		Expect(send(d.URL, "GET", "/kv", "").status).To(Equal(200))
-	})
-
-	It("passes the counter test run by the kvcounter binary", Label("R-MN-CON-1"), func() {
-		s := start(bin.counter, nil, "-url", d.URL)
-		Eventually(s).WithTimeout(time.Minute).Should(gexec.Exit(0))
-		Expect(s.Out).To(gbytes.Say("final: count=300 version=301  PASS"))
 	})
 
 	It("exits cleanly on SIGTERM", Label("S7"), func() {

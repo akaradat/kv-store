@@ -3,7 +3,7 @@ DLV ?= go run github.com/go-delve/delve/cmd/dlv@v1.27.1
 DLV_FLAGS = --headless --listen=127.0.0.1:2345 --api-version=2 --accept-multiclient --continue
 URL ?= http://localhost:7000
 
-.PHONY: check test e2e run-node counter debug-node debug-router
+.PHONY: check test e2e run-node counter lost-update debug-node debug-router
 
 check:
 	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
@@ -22,8 +22,12 @@ e2e:
 run-node:
 	go run ./cmd/kvnode -addr :7000 -node-id node-1
 
+# Both need the key seeded first; see verify.md §2.
 counter:
-	go run ./test/e2e/kvcounter -url $(URL)
+	go run ./demo/kvcounter -url $(URL)
+
+lost-update:
+	go run ./demo/kvlostupdate -url $(URL)
 
 # The debug targets start the binary under Delve on 127.0.0.1:2345, already running; attach an editor to set
 # breakpoints (VS Code: "Attach to make debug-*").

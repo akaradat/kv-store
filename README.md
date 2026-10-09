@@ -83,11 +83,14 @@ make debug-router                                  # kvrouter on :7000 against t
 
 ```bash
 make test            # every spec except real-binary e2e, with the race detector
-make e2e             # builds the binaries and runs them as processes (nodes, router, counter)
+make e2e             # builds the binaries and runs them as processes (nodes, router)
 make check           # gofmt, go vet, staticcheck, layer rules, tests
 make counter         # required test: 3 clients × 100 guarded increments = 300, against a running server
-go run ./test/e2e/kvcounter -no-guard   # same run without ifVersion: shows lost updates
+make lost-update     # negative control: the same run without ifVersion, shows lost updates
 ```
+
+`make counter` and `make lost-update` need their key seeded first; the full demo flow (start, seed with curl,
+run, verify with curl) is in [verify.md §2](docs/requirements/key-store-value-single-node/verify.md#2-concurrent-counter-test-required).
 
 ## Design
 

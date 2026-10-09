@@ -121,10 +121,10 @@ Checks R-MN-CON-1. This is the **same script** as single-node
 [`verify.md` §2](../key-store-value-single-node/verify.md#2-concurrent-counter-test-required) (3 clients ×
 100 increments using `GET` → `PUT ?ifVersion=v`, retrying on 409), pointed at the endpoint URL.
 
-**Pass:** `count == 300`, `version == 301`, total retries > 0, no status other than `200`/`409`.
+**Pass:** `count == 300`, `version == 301`, total conflicts > 0, no status other than `200`/`409`.
 
 **Extra run, counters on different nodes in parallel** (R-MN-CON-2): seed candidate keys
 `counter-1` … `counter-20` with `{"count":0}`. Use `GET /kv` to pick 3 of them owned by 3 different nodes.
 Run the counter test on all 3 keys **at the same time** (3 clients each, 9 in
-total). Each key must end with `count == 300`, `version == 301`. The `test/e2e/kvcounter` spec labelled
-R-MN-CON-2 does this in-process, picking the 3 keys from the slot table instead of `GET /kv`.
+total). Each key must end with `count == 300`, `version == 301`. The `demo/kvcounter` client takes the key with
+`-key`, so run one per key.

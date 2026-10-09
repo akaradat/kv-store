@@ -2,7 +2,7 @@
 
 In-memory key–value HTTP service in Go 1.27, built as a take-home in three parts: single node, multi-node
 (router + nodes), and a design-only roadmap. Two production binaries: `kvnode` (stores data) and
-`kvrouter` (routes keys to nodes, fans out `GET /kv`). **Production code is the stdlib plus chi** (router).
+`kvrouter` (routes keys to nodes, fans out `GET /kv`). Production code uses the stdlib plus chi (router).
 
 ## Commands
 
@@ -11,7 +11,8 @@ make check      # gofmt + vet + staticcheck + layer rules (scripts/check-arch.sh
 make test       # go test -race ./...
 make e2e        # real binaries as processes (-tags e2e); slower, not part of check
 make run-node   # one node on :7000
-make counter    # required 3×100 counter test against URL (default :7000)
+make counter    # required 3×100 counter test against URL (default :7000); seed the key first, see verify.md §2
+make lost-update # the same run without ifVersion: shows lost updates
 make debug-node # kvnode under Delve on :2345 (debug-router: kvrouter against nodes on :7001–:7003)
 docker compose up --build -d   # 3 nodes + router on :7000; README lists the other docker commands
 
@@ -35,11 +36,13 @@ internal/transport/               OUTSIDE: speaks HTTP
 internal/servertest/              test helper: in-process node, router, cluster on httptest
 test/integration/                 whole-system specs: router + real nodes in one process; always run
 test/e2e/                         real binaries as processes; all files tagged //go:build e2e (make e2e)
-  kvcounter/ required 3×100 counter test client (CLI + Run() specs); a test tool, not a product binary
+demo/                             presentation clients for verify.md §2 (seed/verify by curl); not product binaries
+  kvcounter/    required 3×100 counter test: concurrent guarded increments; no tests of its own
+  kvlostupdate/ negative control: the same increments without ifVersion, shows lost updates
 ```
 
 Layer rules (`make check` enforces them): `core` never imports `transport` or `net/http`; `core/kv` imports
-nothing internal; no third-party package reaches a binary. New code goes where
+nothing internal. New code goes where
 [`docs/standard/structure.md` §4](docs/standard/structure.md#4-where-new-code-goes) says.
 
 ## Source of truth
@@ -102,7 +105,6 @@ wrong:
 - Changing the wire format (envelope, error JSON, NDJSON) or the slot count / `cluster.json` shape.
 
 **Never**
-- Add a production dependency other than chi, or a test dependency other than ginkgo/gomega.
 - Create `pkg/`, `util/`, `utils/`, `common/`, `mocks/`, `models/`, or a usecase/service layer.
 - Read, cite or edit `prep/`. It holds private notes and competing designs that are not this project's.
 - Implement Part 3. It is design-only (`docs/roadmap.md`).

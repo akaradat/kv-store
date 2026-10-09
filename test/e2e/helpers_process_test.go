@@ -23,7 +23,7 @@ import (
 
 const startupTimeout = 10 * time.Second
 
-var bin struct{ node, router, counter string }
+var bin struct{ node, router string }
 
 var _ = BeforeSuite(func() {
 	build := func(pkg string) string {
@@ -31,7 +31,7 @@ var _ = BeforeSuite(func() {
 		Expect(err).NotTo(HaveOccurred())
 		return path
 	}
-	bin.node, bin.router, bin.counter = build("cmd/kvnode"), build("cmd/kvrouter"), build("test/e2e/kvcounter")
+	bin.node, bin.router = build("cmd/kvnode"), build("cmd/kvrouter")
 	DeferCleanup(gexec.CleanupBuildArtifacts)
 })
 

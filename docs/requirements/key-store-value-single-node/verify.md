@@ -121,60 +121,67 @@ Expect `200`, `Content-Type: application/x-ndjson`, one line per key (any order)
 
 ## 2. Concurrent counter test (required)
 
-The brief's required test: **3 concurrent clients × 100 increments = 300**. It is `test/e2e/kvcounter`:
-`make counter` (or `go run ./test/e2e/kvcounter -url <base URL>`) runs it against a live server, and its Ginkgo
-spec runs the same `Run()` against an in-process node. This section defines what it does and what counts
-as a pass.
+The brief's required test: **3 concurrent clients × 100 increments = 300**. The increments are run by the
+demo client `demo/kvcounter` (`make counter`). Seeding and verifying are done with curl, so each step can be
+checked by hand.
 
 ### What it checks
 
 Concurrent read-modify-write on one key loses no updates when clients use `ifVersion`. This covers
 per-key atomicity (R-CON-1), no lost updates (R-CON-4), and atomic check-and-write (R-IFV-6).
 
-### Inputs
-
-| Setting | Default |
-|---|---|
-| Base URL | `http://localhost:7000` |
-| Clients | 3 |
-| Increments per client | 100 |
-| Key | `counter-<random suffix>`, unique per run so reruns don't collide |
-
 ### Steps
 
-1. **Seed:** `GET /kv/<key>` → expect `404` (a key that already exists stops the run without writing to
-   it). Then `PUT /kv/<key>` with `{"count":0}` → expect `200`, `version` 1.
-2. **Run the clients concurrently.** Start all of them at the same moment (e.g. release them together once
-   all are ready), so their requests really overlap. Each client repeats until it has **100 successful**
-   increments:
-   1. `GET /kv/<key>` → read `count = n` and `version = v`.
-   2. `PUT /kv/<key>?ifVersion=v` with `{"count": n+1}`.
-   3. `200` → one increment done. `409` → someone else wrote first: count a retry and go back to step 1.
-      Any other status → the test fails right away.
-3. **Wait** for all clients to finish.
-4. **Verify:** `GET /kv/<key>`.
+1. **Start the server** with an empty store:
+   ```bash
+   make run-node                  # or: docker compose up --build -d  (router + 3 nodes on :7000)
+   ```
+2. **Seed** the key:
+   ```bash
+   curl -i -X PUT http://localhost:7000/kv/counter-with-ifversion -d '{"count":0}'
+   ```
+   Expect `200`:
+   ```json
+   {"key":"counter-with-ifversion","value":{"count":0},"version":1}
+   ```
+3. **Run the clients concurrently:**
+   ```bash
+   make counter                   # go run ./demo/kvcounter -url http://localhost:7000
+   ```
+   The script starts all clients at the same moment, so their requests really overlap. Each client repeats
+   until it has **100 successful** increments:
+   1. `GET /kv/counter-with-ifversion` → read `count = n` and `version = v`.
+   2. `PUT /kv/counter-with-ifversion?ifVersion=v` with `{"count": n+1}`.
+   3. `200` → one increment done. `409` → someone else wrote first: count a conflict and go back to step 1.
+      Any other status → the script fails right away.
+
+   It waits for all clients to finish, then prints successes and conflicts per client.
+4. **Verify** the key:
+   ```bash
+   curl -i http://localhost:7000/kv/counter-with-ifversion
+   ```
+   Expect `200`:
+   ```json
+   {"key":"counter-with-ifversion","value":{"count":300},"version":301}
+   ```
+
+The store is in memory: to run again, restart the server, or seed a fresh key and pass it with `-key`.
 
 ### Pass criteria
 
 - `value.count == 300` (clients × increments).
 - `version == 301` (1 seed write + 300 successful increments).
-- Every client finished with exactly 100 successes and got no status other than `200` or `409`.
+- The script exits 0: every client finished with exactly 100 successes and got no status other than `200`
+  or `409`.
 
-### Output
+### Negative control (`demo/kvlostupdate`)
 
-The script prints the final `count`, `version`, and **retries per client**, e.g.:
+The same steps on a second key, with `demo/kvlostupdate`, whose `PUT` has **no** `ifVersion`:
+```bash
+curl -i -X PUT http://localhost:7000/kv/counter-without-ifversion -d '{"count":0}'
+make lost-update               # go run ./demo/kvlostupdate -url http://localhost:7000
+curl -i http://localhost:7000/kv/counter-without-ifversion
 ```
-client 1: 100 ok, 87 retries
-client 2: 100 ok, 92 retries
-client 3: 100 ok, 79 retries
-final: count=300 version=301  PASS
-```
-
-Total retries should be **> 0**. Zero retries means the clients never collided, so the run didn't
-exercise concurrency. Rerun it, or raise the client count.
-
-### Negative control (optional flag)
-
-The same run **without** `ifVersion` (plain `PUT`). The expected result is `version == 301` but
-`count < 300`: updates are lost. This shows the pass above comes from the `ifVersion` guard, not from lucky
-timing. The script reports this as "lost N updates", not as a failure.
+The expected result is `version == 301` but `count < 300`: every write was accepted, but clients overwrote
+each other's increments. This shows the pass above comes from the `ifVersion` guard, not from lucky timing.
+It is a demonstration, not a failure.
