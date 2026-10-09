@@ -117,5 +117,5 @@ wrong:
 3. Docs match the code (`solution.md`; `decisions.md` only with approval).
 4. No new folders outside the layout.
 
-In Claude Code, a Stop hook (`.claude/hooks/stop-check.sh`) runs `make check` whenever Go files, `go.mod` or
-the Makefile have uncommitted changes, and sends failures back before the turn can end.
+After changing Go files, `go.mod` or the Makefile, run `make check` and fix every failure before handing the
+work back.
