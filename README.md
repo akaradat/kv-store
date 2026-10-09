@@ -100,16 +100,5 @@ run, verify with curl) is in [verify.md §2](docs/requirements/key-store-value-s
 | Multi-node: behaviour / design / decisions / verification | [`docs/requirements/key-store-value-multi-node/`](docs/requirements/key-store-value-multi-node/) |
 | Code layout and layer rules | [`docs/standard/structure.md`](docs/standard/structure.md) |
 | Code conventions | [`docs/standard/conventions.md`](docs/standard/conventions.md) |
-| Part 3 roadmap | `docs/roadmap.md` (not written yet) |
+| Part 3 roadmap | [`docs/requirements/key-store-value-roadmap/roadmap.md`](docs/requirements/key-store-value-roadmap/roadmap.md) |
 | Working with AI agents | [`AGENTS.md`](AGENTS.md) |
-
-## Status
-
-- [x] Decide stack and Part 1 concurrency model
-- [x] Decide Part 2 partitioning and routing
-- [x] Project structure, conventions, agent instructions
-- [x] Part 1: single node
-- [x] Part 1: required test, 3 clients × 100 increments = 300
-- [x] Part 2: multi-node and `GET /kv` NDJSON
-- [ ] Part 3: roadmap doc and diagram
-- [ ] Demo rehearsal (40–50 min)

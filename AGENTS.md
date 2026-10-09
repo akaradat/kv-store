@@ -107,7 +107,7 @@ wrong:
 **Never**
 - Create `pkg/`, `util/`, `utils/`, `common/`, `mocks/`, `models/`, or a usecase/service layer.
 - Read, cite or edit `prep/`. It holds private notes and competing designs that are not this project's.
-- Implement Part 3. It is design-only (`docs/roadmap.md`).
+- Implement Part 3. It is design-only (`docs/requirements/key-store-value-roadmap/roadmap.md`).
 - Commit or push unless asked.
 
 ## Definition of done

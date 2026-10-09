@@ -41,9 +41,9 @@ kv-store/
 │   └── kvlostupdate/              negative control: the same increments without ifVersion
 ├── scripts/                       check-arch.sh (layer rules)
 ├── docs/
-│   ├── requirements/              brief + per-part requirement / solution / decisions / verify
-│   ├── standard/                  this file + conventions.md
-│   └── roadmap.md                 Part 3 (design only)
+│   ├── requirements/              brief + per-part requirement / solution / decisions / verify;
+│   │                              key-store-value-roadmap/roadmap.md is Part 3 (design only)
+│   └── standard/                  this file + conventions.md
 └── prep/                          gitignored private study notes; not part of the project
 ```
 
