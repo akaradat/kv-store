@@ -71,7 +71,7 @@ Keywords **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are used as in RFC 2119
 - **R-KEY-5** An invalid key → **400**.
 - **R-KEY-6** A path with more than one segment after `/kv/` (e.g. `/kv/a/b`, or the trailing slash in
   `/kv/a/`) does not match the route → **404**.
-- **R-KEY-7** An empty key (`/kv/`) → **400**.
+- **R-KEY-7** An empty key (`/kv/`) does not match the route → **404**.
 
 > If an HTTP client rewrites the path before sending (for example, curl collapsing `/kv/..`), the service
 > handles the request it actually receives.
@@ -134,7 +134,7 @@ Keywords **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are used as in RFC 2119
 ## 7. Endpoints
 
 All responses have `Content-Type: application/json`, except a successful `GET /kv`
-(`application/x-ndjson`, §7.4) **(part 2)**.
+(`application/x-ndjson`, §7.4) **(part 2)** and a 405, which has no body (R-HTTP-1).
 
 ### 7.1 `GET /kv/{key}`
 
@@ -196,8 +196,7 @@ Lists every key stored on **this node**.
   - the listing MUST NOT block writes for its whole duration.
 - **R-LIST-7** No query parameters are defined (no pagination, prefix, or limit). Unknown parameters are
   ignored.
-- **R-LIST-8** `/kv/` (trailing slash) is **not** the list endpoint. It is `/kv/{key}` with an empty key →
-  400 (R-KEY-7).
+- **R-LIST-8** `/kv/` (trailing slash) is **not** the list endpoint. It matches no route → 404 (R-KEY-7).
 - If the connection drops while the listing streams, the client gets a truncated body (see R-LIST-2).
   The service does not resume it.
 
@@ -209,9 +208,11 @@ Example:
 
 ### 7.5 Other methods and paths
 
-- **R-HTTP-1** Any method other than `GET`, `PUT`, `PATCH` on `/kv/{key}` (e.g. `DELETE`, `POST`) → **405**,
-  with an `Allow: GET, PUT, PATCH` header. **(part 2)** Any method other than `GET` on
-  `/kv` → **405**, with `Allow: GET`.
+- **R-HTTP-1** Any method other than `GET`, `PUT`, `PATCH` on `/kv/{key}` (e.g. `DELETE`, `POST`, `HEAD`)
+  → **405**, with an `Allow` header listing `GET`, `PUT`, `PATCH`. **(part 2)** Any method other than `GET`
+  on `/kv` → **405**, with `Allow` listing `GET`. The methods may come in any order, and may be sent as
+  one comma-separated header or as one header line per method (HTTP treats both the same). A 405 has an
+  **empty body** and no `Content-Type`: it is the router framework's own response.
 - **R-HTTP-2** Any path not defined here (e.g. `/`, `/kv/a/b`) → **404**.
 - **R-HTTP-3** Creating a key returns **200**, not 201. The client can tell a create from `version: 1`.
 
@@ -219,9 +220,10 @@ Example:
 
 ## 8. Value fidelity (what GET returns)
 
-- **R-FID-1** After a `PUT`, or a `PATCH` that **creates** the key, `value` is the **exact JSON text** of the
-  request body, minus surrounding whitespace. Field order, number text (e.g. `12345678901234567890`, `1.0`),
-  string escapes, inner whitespace, and duplicate field names are preserved.
+- **R-FID-1** After a `PUT`, or a `PATCH` that **creates** the key, `value` is the request body's JSON with
+  whitespace outside strings removed. Field order, number text (e.g. `12345678901234567890`, `1.0`), string
+  contents and escapes (including `<`, `>`, `&` and `\u0041`), and duplicate field names are preserved. A raw
+  U+2028 or U+2029 inside a string may come back as `\u2028` / `\u2029`.
 - **R-FID-2** After a `PATCH` **merge**, `value` is only guaranteed to be **semantically equal** to the merge
   result. Field order, whitespace, number formatting, and escapes are not guaranteed.
 - **R-FID-3** Duplicate field names in a merge (in the stored value or in `delta`) have **undefined**
@@ -233,7 +235,7 @@ Example:
 
 ## 9. Errors
 
-- **R-ERR-1** Every 4xx response has the body:
+- **R-ERR-1** Every 4xx response except 405 (R-HTTP-1) has the body:
   ```json
   { "error": "<code>", "message": "<human-readable detail>" }
   ```
@@ -249,8 +251,8 @@ Example:
 | 400 | `invalid_key` | §3 |
 | 400 | `invalid_if_version` | §5 R-IFV-2 |
 | 400 | `invalid_body` | §6 |
-| 404 | `not_found` | GET of a missing key; unknown path |
-| 405 | `method_not_allowed` | §7.5 |
+| 404 | `not_found` | GET of a missing key; unknown path, including `/kv/` |
+| 405 | — (empty body) | §7.5 R-HTTP-1 |
 | 409 | `version_conflict` | §5 R-IFV-3, R-IFV-4 |
 | 413 | `body_too_large` | §6 R-BODY-4 |
 
@@ -324,18 +326,18 @@ and the brief's required concurrent counter test (3 clients × 100 increments = 
 | 24 | Body nested 65 levels deep | 400 `invalid_body` |
 | 25 | Body with BOM or invalid UTF-8 | 400 `invalid_body` |
 | 26 | `Content-Type: text/plain` with valid object body | 200 (header ignored) |
-| 27 | `GET /kv/` | 400 `invalid_key` |
+| 27 | `GET /kv/` | 404 `not_found` |
 | 28 | `GET /kv/a/b`, `GET /kv/a/` | 404 |
 | 29 | `GET /kv/user%3A42` | 400 `invalid_key` (`%` not allowed, no decoding) |
 | 30 | `GET /kv/a b`, `GET /kv/ключ`, key of 257 chars | 400 `invalid_key` |
 | 31 | `GET /kv/.` or `/kv/..` (as received by server) | 400 `invalid_key` |
 | 32 | `GET /kv/User:1` after `PUT /kv/user:1` | 404 (case-sensitive) |
-| 33 | `DELETE /kv/a`, `POST /kv/a` | 405, `Allow: GET, PUT, PATCH` |
+| 33 | `DELETE /kv/a`, `POST /kv/a` | 405, `Allow` lists `GET`, `PUT`, `PATCH` (any order), empty body |
 | 34 (part 2) | `GET /kv` on empty store | 200, `application/x-ndjson`, empty body |
 | 34a (part 2) | `GET /kv` after creating `a` and `b` (node ID `node-1`) | 2 lines, any order, each `{"key":…,"node":"node-1"}\n` |
 | 34b (part 2) | `GET /kv` after 5 writes to the same key | that key listed once |
 | 34c (part 2) | `GET /kv?limit=1&prefix=x` | params ignored, all keys listed |
-| 34d (part 2) | `POST /kv`, `DELETE /kv` | 405, `Allow: GET` |
+| 34d (part 2) | `POST /kv`, `DELETE /kv` | 405, `Allow: GET`, empty body |
 | 34e (part 2) | `GET /kv` while other clients create keys | every key that existed at the start is listed. New keys may or may not be |
 | 34f (part 2) | Writes during a long `GET /kv` | they still complete, they don't wait for the listing |
 | 35 | PUT `{"n":12345678901234567890,"f":1.0}` then GET | number text returned exactly as sent |
@@ -352,13 +354,14 @@ and the brief's required concurrent counter test (3 clients × 100 increments = 
 | D4 | Strict `ifVersion` parsing, repeated param → 400 | No ambiguity on a concurrency guard. |
 | D5 | Key charset `[A-Za-z0-9:_.-]{1,256}`, no decoding, no `.`/`..` | Raw path equals the key, so there are no encoding or normalization surprises. |
 | D6 | `Content-Type` ignored | Fewer status codes, and curl demos work without `-H`. |
-| D7 | Raw text after PUT, semantic equality after merge | Keeps duplicate fields and number precision on PUT without making merge expensive. |
+| D7 | Same text minus whitespace after PUT, semantic equality after merge | Keeps duplicate fields and number precision on PUT without making merge expensive. Whitespace is dropped so the response can be written by the standard JSON encoder (conventions §0). |
 | D8 | Body: one JSON object, ≤ 1 MiB, depth ≤ 64 | Rejects ambiguous input and bounds memory per request. |
 | D9 | PATCH `null` stored literally (not RFC 7396) | The brief says shallow merge. No delete anywhere. |
-| D10 | JSON error body, `currentVersion` on 409, 405 + `Allow` | Helps debugging and lets a client retry without an extra GET. |
+| D10 | JSON error body, `currentVersion` on 409, 405 + `Allow` | Helps debugging and lets a client retry without an extra GET. The 405 body is left to the router framework (D17). |
 | D11 | Create returns 200 | Literal reading of the brief. |
 | D12 | Counter test uses a CAS loop + negative control (see `verify.md` §2) | No increment API. Shows the guard is what prevents lost updates. |
 | D13 (part 2) | `GET /kv` is part of the single-node contract | One spec for a node, whether it runs alone or in a cluster. A multi-node layer aggregates per-node listings. |
 | D14 (part 2) | Node ID set at startup, defaults to `node-1` | A single node works with no config. A cluster gives each node its own ID. |
 | D15 (part 2) | `GET /kv` is weakly consistent | Doesn't stall writes. Matches what a multi-node fan-out can promise. |
 | D16 (part 2) | `GET /kv` unordered, no params, keys only | Matches the brief's format. Sorting would force a merge across nodes. |
+| D17 | Route-level edge cases follow the router framework (chi): `/kv/` → 404, 405 with `Allow` (any order) and an empty body | These cases matter little to clients. Matching the framework's defaults keeps the routing code standard instead of overriding it. |

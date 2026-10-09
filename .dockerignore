@@ -1,0 +1,7 @@
+# Only go.mod, go.sum, cmd/ and internal/ are needed to build. prep/ and .tmp/ are private and must never
+# reach a build context.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/

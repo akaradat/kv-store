@@ -21,7 +21,7 @@ flowchart LR
     C[Client<br/>curl / Go test] -->|"HTTP :7000"| R
 
     subgraph RT[kvrouter]
-        R[Dispatcher + validation<br/>same code as a node] --> SL["slot = crc32(key) % 1024<br/>slot → node table"]
+        R[own chi routes<br/>validation shared with nodes] --> SL["slot = crc32(key) % 1024<br/>slot → node table"]
         SL --> FW[Forwarder<br/>http.Client, no retries]
         R --> AG[GET /kv aggregator]
     end
@@ -70,7 +70,7 @@ Nodes don't know the table. They store whatever the router sends them.
 
 ```mermaid
 flowchart LR
-    A[request] --> B[dispatcher<br/>route + method]
+    A[request] --> B[chi router<br/>route + method]
     B --> C[key check]
     C --> D[ifVersion parse]
     D --> F[body checks]
@@ -81,8 +81,9 @@ flowchart LR
 
 - Steps up to the body checks are the **same code** as in a node. A bad request is rejected at the router
   with exactly the error a single node would return, even when its owner is down.
-- The router reads the body (up to 1 MiB) to check it, then forwards those same bytes untouched, along
-  with the raw path and query string.
+- The router reads the body (up to 1 MiB) to check it, then forwards it with the raw path and query
+  string. It forwards the body with surrounding whitespace trimmed, which is exactly what the node would
+  store anyway (single-node R-FID-1). No client headers are forwarded.
 - The node validates again, then does the real work (version check, write) under its own per-key lock.
   The router takes no locks.
 
@@ -94,6 +95,19 @@ flowchart LR
 | Sent, but no reply within the node timeout, or the connection dropped | 504 `node_timeout` | Unknown |
 | The node replied with something that isn't a valid response | 502 `bad_node_response` | Unknown |
 
+How the router tells them apart, using an `httptrace` hook on each node request:
+
+| Signal | Response |
+|---|---|
+| The request was never written to a connection (refused, unreachable, or the node timeout ran out while connecting) | 503 |
+| Written, then the node timeout ran out, or the connection closed before any reply byte | 504 |
+| Reply bytes arrived but Go's HTTP client couldn't parse them | 502 |
+| A parsed reply whose body was cut off | 504 |
+| A full reply whose status a node never sends (anything but 200, 400, 404, 405, 409, 413) | 502 |
+| Otherwise | copy the node's status, `Content-Type`, `Allow` and body |
+
+- The router reads the node's **whole** reply before answering. If it streamed the reply instead, a node
+  that dropped halfway would leave the client holding a 200 with a cut-off body, with no way to send 504.
 - The router never retries. A resent write could raise the version twice.
 - One shared connection pool keeps up to 128 idle connections per node (Go's default of 2 would keep
   opening and closing connections under load).
@@ -120,13 +134,19 @@ sequenceDiagram
 ## 4. `GET /kv` across nodes
 
 1. **Open all.** The router sends `GET /kv` to every node in parallel and waits until each has answered
-   with its headers. If any node fails here, the client gets 503 and no list.
-2. **Copy in order.** The router sends 200, then copies each node's stream to the client in turn, in
-   `cluster.json` order. Each node already writes its own ID in every line, so the router copies bytes
-   without reading them. Router memory stays small whatever the number of keys.
+   with its headers. If any node fails here (can't connect, no headers within the node timeout, or a
+   status other than 200), the client gets 503 and no list.
+2. **Copy in order.** The router sends 200 and flushes it at once, then copies each node's stream to the
+   client in turn, in `cluster.json` order, flushing each chunk. Each node already writes its own ID in
+   every line, so the router copies bytes without reading them. Router memory stays small whatever the
+   number of keys.
 3. **Hold back the last newline.** The router delays the final `\n` it has copied until more data or a
-   clean end arrives. If a node fails mid-stream, or goes quiet for longer than the node timeout, the
-   router aborts the connection without that newline, so a failed listing never looks complete.
+   clean end arrives. If a node fails mid-stream, goes quiet for longer than the node timeout, or ends
+   its stream mid-line, the router aborts the connection with `panic(http.ErrAbortHandler)` without that
+   newline. The client sees a body that doesn't end in `\n` **and** a broken transfer (curl reports
+   error 18), so a failed listing never looks complete. Flushing every chunk matters here: an abort
+   throws away whatever is still buffered, and the client must at least get the 200 and the lines
+   copied so far.
 
 ```mermaid
 sequenceDiagram
@@ -167,7 +187,14 @@ kvnode   -addr :7003 -node-id node-3
 kvrouter -addr :7000 -cluster cluster.json -node-timeout 2s
 ```
 
-A start script launches all four for the demo.
+`docker compose up --build -d` runs this deployment in containers (`Dockerfile`, `compose.yaml`): one image
+holding both binaries, three node services that take their ID from `KV_NODE_ID`, and the router. The
+router's topology is written inline in `compose.yaml`, with the Compose service names as URLs
+(`http://node-N:7000`). The README lists the commands for logs and for killing and restarting a node.
+
+`cluster.json` is the same topology for a router running on the host, e.g. under the debugger
+(`make debug-router` or the VS Code "kvrouter" launch config), against the containers' nodes published on
+`localhost:7001`–`7003`.
 
 | `kvrouter` flag | Default | Notes |
 |---|---|---|
@@ -187,9 +214,10 @@ A start script launches all four for the demo.
 }
 ```
 
-- At startup the router checks: at least one node, valid IDs, no duplicates. Otherwise it exits.
+- At startup the router checks: at least one node, valid IDs, no duplicates, absolute `http(s)` URLs, and
+  no unknown fields. Otherwise it exits.
 - Each node's `-node-id` must match its entry in `cluster.json`. Nothing checks this automatically; the
-  start script keeps them in sync.
+  Compose file keeps them in sync: each service's `KV_NODE_ID` matches its service name and its topology ID.
 
 ---
 

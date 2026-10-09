@@ -1,0 +1,53 @@
+# Three kvnode containers and one kvrouter. The router is on localhost:7000; nodes are also published on
+# 7001–7003, so you can read a node directly or debug a router on the host against them (cluster.json).
+# Each node's KV_NODE_ID must match its ID in the router's topology below (R-MN-CFG-2).
+name: kv-store
+
+x-node: &node
+  image: kv-store:local
+  build: .
+  command: ["kvnode", "-addr", ":7000"]
+
+configs:
+  cluster:
+    content: |
+      {
+        "nodes": [
+          { "id": "node-1", "url": "http://node-1:7000" },
+          { "id": "node-2", "url": "http://node-2:7000" },
+          { "id": "node-3", "url": "http://node-3:7000" }
+        ]
+      }
+
+services:
+  router:
+    image: kv-store:local
+    build: .
+    command: ["kvrouter", "-addr", ":7000", "-cluster", "/etc/kv/cluster.json"]
+    configs:
+      - source: cluster
+        target: /etc/kv/cluster.json
+    ports:
+      - "7000:7000"
+    depends_on: [node-1, node-2, node-3]
+
+  node-1:
+    <<: *node
+    environment:
+      KV_NODE_ID: node-1
+    ports:
+      - "7001:7000"
+
+  node-2:
+    <<: *node
+    environment:
+      KV_NODE_ID: node-2
+    ports:
+      - "7002:7000"
+
+  node-3:
+    <<: *node
+    environment:
+      KV_NODE_ID: node-3
+    ports:
+      - "7003:7000"

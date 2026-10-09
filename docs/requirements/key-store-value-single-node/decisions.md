@@ -13,9 +13,9 @@ Multi-node decisions (partition function, hash, routing, fan-out) live in
 
 | # | Decision | Choice |
 |---|---|---|
-| S1 | Language / stack | Go, standard library only |
+| S1 | Language / stack | Go, standard library plus the chi router |
 | S2 | How to store values and lock | Per-key mutex + `sync.Map` directory + immutable snapshot |
-| S3 | Value representation | Raw bytes, not re-encoded; response built by hand |
+| S3 | Value representation | Raw bytes stored; response written by `json.Encoder` (HTML escaping off) |
 | S4 | What runs inside the lock | Only check → compute → publish |
 | S5 | PATCH merge | Decode top level only, overlay, re-encode |
 | S6 | `GET /kv` (part 2) | Stream inside `sync.Map.Range` |
@@ -25,7 +25,7 @@ Multi-node decisions (partition function, hash, routing, fan-out) live in
 
 ## S1. Language / stack
 
-**approach 1: Go, standard library only (use).**
+**approach 1: Go, standard library plus a router library (use).**
 - pros: my main programming language right now. Real parallelism, so locking is actually exercised rather
   than provided by the runtime. The race detector. One binary, no dependencies.
 - cons: not the company's stack (Java/Quarkus). Default JSON decoding turns numbers into `float64` (see S3).
@@ -41,10 +41,22 @@ use approach 1 because the assignment is about concurrency, and Go is built for 
 truly in parallel across cores, the standard library has the locks and atomics this design needs
 (`sync.Mutex`, `sync.Map`, `atomic.Pointer`), and the race detector catches concurrency bugs in tests.
 
-No `ServeMux`: routing is a small hand-written dispatcher on the raw path. Go's standard router redirects
-`/kv/..`, answers HEAD with 200, returns plain-text 405s, and decodes `%3A` in keys (verified). Its query
-parser also silently drops a malformed `ifVersion`, which would turn a guarded write into an unconditional
-one, so `ifVersion` is parsed by hand.
+**Routing: chi.** A hand-written dispatcher was the first version; it was replaced so routing reads like
+standard Go and needs no upkeep. Options compared (behavior verified by probing each with the edge cases
+in `requirement.md` §12):
+
+| Router | Fit |
+|---|---|
+| Go's `ServeMux` | ❌ Redirects `/kv/..`, answers HEAD with 200, returns plain-text 405s, decodes `%3A` in keys |
+| Gin, Echo | Full frameworks with their own context type. Gin redirects trailing slashes, unescapes path values and answers 404 instead of 405 by default |
+| **chi (use)** | A router only: handlers stay plain `net/http`. Routes on the still-encoded path, so `%3A` reaches key validation; no redirects; 405 with `Allow` |
+
+The route-level edge cases now follow chi's defaults (`requirement.md` D17): `/kv/` is a 404, and a 405
+has `Allow` (in any order) but an empty body. A custom 405 handler could add a JSON body, but chi then
+drops `Allow`.
+
+`ifVersion` is still parsed by hand: Go's query parser silently drops a malformed pair, which would turn a
+guarded write into an unconditional one.
 
 ---
 
@@ -184,8 +196,8 @@ sequenceDiagram
 
 ## S3. Value representation
 
-Needed: GET after PUT returns the exact body text (minus surrounding whitespace). After a PATCH merge, only
-the meaning has to match.
+Needed: GET after PUT returns the body's JSON with field order, number text, escapes and duplicate names
+intact; whitespace outside strings may go (R-FID-1). After a PATCH merge, only the meaning has to match.
 
 **approach 1:** decode into Go values (`json.Unmarshal` into `any`). Not working ❌.
 `12345678901234567891` comes back as `12345678901234567000`. Field order, `1.0` and escapes are lost.
@@ -198,18 +210,25 @@ the meaning has to match.
 - pros: smaller, and the same JSON with different whitespace is stored identically.
 - cons: compaction removes inner whitespace, so GET no longer returns the exact text.
 
-**approach 4: raw bytes trimmed of surrounding whitespace, never re-encoded (use).**
-- PUT stores the body with leading/trailing whitespace trimmed. GET writes the bytes back as they are.
-- pros: byte-exact fidelity: number text, duplicate names and whitespace all survive. GET does no JSON
-  work.
-- cons: whitespace costs memory. The response has to be built by hand (below).
+**approach 4: raw bytes trimmed of surrounding whitespace, never decoded (use).**
+- PUT stores the body with leading/trailing whitespace trimmed. GET embeds the bytes as a `json.RawMessage`.
+- pros: number text, escapes and duplicate names can't change, because nothing is decoded.
+- cons: whitespace costs memory, though the response drops it (below).
 
-use approach 4 because it's the only one that returns the exact text.
+use approach 4 for storage: nothing is decoded, so numbers, escapes and duplicate names can't change.
 
-The response is built by hand, never with `json.Marshal`. `json.Marshal` compacts an embedded raw
-value and rewrites `<`, `>` and `&` inside strings as `\u` escape sequences (verified), which would change the stored
-text. The envelope is written as `{"key":…,"value":` + stored bytes + `,"version":…}`. Error bodies contain
-no stored values, so they can use `json.Marshal`.
+**Writing the response.** First version: built by hand as `{"key":…,"value":` + stored bytes +
+`,"version":…}`, so GET returned the exact text, inner whitespace included. Replaced under conventions §0
+(readability over hand-written code): the envelope is a struct with the value as `json.RawMessage`, written by
+`json.Encoder` with `SetEscapeHTML(false)`. Verified on Go 1.27:
+
+| Writer | `<`, `>`, `&` | inner whitespace | number text, dup names, `\u0041` |
+|---|---|---|---|
+| `json.Marshal` ❌ | rewritten as `\u003c` … | removed | kept |
+| `json.Encoder` + `SetEscapeHTML(false)` (use) | kept | removed | kept |
+
+The cost, accepted in R-FID-1: inner whitespace is removed, and a raw U+2028/U+2029 is escaped. The same
+writer is used for error bodies.
 
 ---
 

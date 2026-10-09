@@ -101,7 +101,7 @@ Expect `200`:
 | `curl -i -X PUT 'localhost:7000/kv/user:42?ifVersion=0' -d '{}'` | `400` `invalid_if_version` |
 | `curl -i -X PUT 'localhost:7000/kv/new-key?ifVersion=1' -d '{}'` | `409`, `currentVersion: null`; the key is still not created |
 | `curl -i -X PUT 'localhost:7000/kv/bad%20key' -d '{}'` | `400` `invalid_key` |
-| `curl -i -X DELETE localhost:7000/kv/user:42` | `405`, header `Allow: GET, PUT, PATCH` |
+| `curl -i -X DELETE localhost:7000/kv/user:42` | `405`, `Allow` headers for `GET`, `PUT`, `PATCH` (any order), empty body |
 
 After the rejections, `curl localhost:7000/kv/user:42` still returns `version` 4. Failed requests change
 nothing.
@@ -121,8 +121,10 @@ Expect `200`, `Content-Type: application/x-ndjson`, one line per key (any order)
 
 ## 2. Concurrent counter test (required)
 
-The brief's required test: **3 concurrent clients × 100 increments = 300**. It will be a Go test script
-(added later). This section defines what the script does and what counts as a pass.
+The brief's required test: **3 concurrent clients × 100 increments = 300**. It is `test/e2e/kvcounter`:
+`make counter` (or `go run ./test/e2e/kvcounter -url <base URL>`) runs it against a live server, and its Ginkgo
+spec runs the same `Run()` against an in-process node. This section defines what it does and what counts
+as a pass.
 
 ### What it checks
 
@@ -140,7 +142,8 @@ per-key atomicity (R-CON-1), no lost updates (R-CON-4), and atomic check-and-wri
 
 ### Steps
 
-1. **Seed:** `PUT /kv/<key>` with `{"count":0}` → expect `200`, `version` 1.
+1. **Seed:** `GET /kv/<key>` → expect `404` (a key that already exists stops the run without writing to
+   it). Then `PUT /kv/<key>` with `{"count":0}` → expect `200`, `version` 1.
 2. **Run the clients concurrently.** Start all of them at the same moment (e.g. release them together once
    all are ready), so their requests really overlap. Each client repeats until it has **100 successful**
    increments:

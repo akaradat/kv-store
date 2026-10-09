@@ -61,7 +61,7 @@ Expect:
 ## 3. A node is down
 
 Use `GET /kv` to pick a key owned by `node-2` (say `a`) and one owned by another node (say `b`). Then
-stop the `node-2` process.
+stop the `node-2` process (with Docker: `docker compose kill node-2`).
 
 | Command | Expect |
 |---|---|
@@ -73,7 +73,7 @@ stop the `node-2` process.
 | `curl -i -X PUT localhost:7000/kv/a -d '[1]'` | `400` `invalid_body`. Stateless validation still answers (R-MN-FAIL-5) |
 | `curl -i localhost:7000/kv` | `503` `node_unavailable`, and **no** partial list (R-MN-LIST-6) |
 
-Restart `node-2` (no other change):
+Restart `node-2` (no other change; with Docker: `docker compose start node-2`):
 
 | Command | Expect |
 |---|---|
@@ -88,8 +88,10 @@ Restart `node-2` (no other change):
 
 ## 4. Key spread test
 
-Checks R-MN-TOP-3, R-MN-TOP-5. This will be a Go test script (added later). This section defines what it
-does.
+Checks R-MN-TOP-3, R-MN-TOP-5. It runs as two Ginkgo specs rather than a script: `core/cluster` puts
+30,000 seeded random keys through the slot table, and `integration` writes 30,000 keys through an
+in-process router to 3 nodes and checks `GET /kv` (`go test ./... -ginkgo.label-filter=R-MN-TOP-5`). This
+section defines what they check.
 
 **Inputs:** endpoint URL, number of keys = **30,000**, 3 nodes, a fresh deployment.
 
@@ -124,4 +126,5 @@ Checks R-MN-CON-1. This is the **same script** as single-node
 **Extra run, counters on different nodes in parallel** (R-MN-CON-2): seed candidate keys
 `counter-1` … `counter-20` with `{"count":0}`. Use `GET /kv` to pick 3 of them owned by 3 different nodes.
 Run the counter test on all 3 keys **at the same time** (3 clients each, 9 in
-total). Each key must end with `count == 300`, `version == 301`.
+total). Each key must end with `count == 300`, `version == 301`. The `test/e2e/kvcounter` spec labelled
+R-MN-CON-2 does this in-process, picking the 3 keys from the slot table instead of `GET /kv`.

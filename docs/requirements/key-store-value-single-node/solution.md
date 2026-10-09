@@ -8,7 +8,7 @@ made, and what else was considered, is in [`decisions.md`](decisions.md). How to
 
 ## 1. At a glance
 
-One Go process, standard library only. An HTTP server hands every request to a small dispatcher, which
+One Go process: the standard library plus the chi router. An HTTP server hands every request to chi, which
 validates it and calls an in-memory store. The store gives each key its own lock and keeps each value as an
 immutable snapshot, so reads never lock and never see half a write.
 
@@ -17,10 +17,10 @@ flowchart LR
     C[Client<br/>curl / Go test] -->|HTTP :7000| S
 
     subgraph P[kvnode process]
-        S[http.Server<br/>timeouts, graceful shutdown] --> D[Dispatcher<br/>raw path + method]
+        S[http.Server<br/>timeouts, graceful shutdown] --> D[chi router<br/>route + method]
         D -->|"/kv/:key"| H[Key handler<br/>GET / PUT / PATCH]
         D -->|/kv| L[List handler<br/>part 2]
-        D -->|else| E[404 / 405<br/>JSON error]
+        D -->|else| E[404 JSON error<br/>405 from chi]
         H --> V[Validation<br/>key → ifVersion → size → body]
         V --> ST[(Store)]
         L --> ST
@@ -49,12 +49,13 @@ flowchart LR
 
 - **Get(key)**: look up the entry, load its snapshot pointer. No lock. Missing entry or empty entry → not
   found.
-- **Update(key, ifVersion, compute)**: the only way to write. Used by both PUT and PATCH.
+- **Put(key, ifVersion, value)** and **Patch(key, ifVersion, delta)**: the two ways to write. Both go
+  through one internal update path, so the code that runs under the lock stays inside the store:
   1. Look up the entry. If it's missing and `ifVersion` was given → conflict, and no entry is created.
      Otherwise create it (`LoadOrStore`, so racing creators share one entry).
   2. Lock the entry.
   3. Check `ifVersion` against the current snapshot → conflict if it doesn't match.
-  4. Compute the new value (PUT: the body; PATCH: the merge).
+  4. Compute the new value (Put: the body; Patch: the delta on a new key, otherwise the merge).
   5. Publish a new snapshot with version + 1, then unlock.
 - **Range(fn)**: visit every key that has a snapshot, without locking. Used by `GET /kv`.
 
@@ -103,27 +104,33 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    A[request] --> B[dispatcher<br/>route + method]
+    A[request] --> B[chi router<br/>route + method]
     B --> C[key check]
     C --> D[ifVersion parse]
     D --> F[body checks]
-    F --> G["store.Update<br/>(lock: check, compute, publish)"]
+    F --> G["store.Put / Patch<br/>(lock: check, compute, publish)"]
     G --> H[write response<br/>from snapshot]
 ```
 
 Each step can stop the request with its error, in this order: 404/405 → 400 key → 400 `ifVersion` → 413 →
-400 body → 409. Only the `Update` step holds a lock.
+400 body → 409. Only the `Put` / `Patch` step holds a lock.
 
-### Dispatcher
+### Routing
 
-A hand-written handler on the raw, still-encoded path (not Go's `ServeMux`, which redirects `/kv/..`,
-answers HEAD, and decodes `%3A`):
+`node.NewHandler` declares the node's chi routes, one plain `http.HandlerFunc` each. (`kvrouter` declares
+its own routes; the two share only the `httpapi` checks and writers.) A key handler starts with
+`httpapi.ParseKey` (GET) or `httpapi.ParseWrite` (PUT, PATCH), which run the checks after routing in R-ERR-4
+order. chi routes on the still-encoded path, so `{key}` arrives undecoded (`user%3A42`
+stays as sent and fails key validation):
 
 | Path | Methods | Otherwise |
 |---|---|---|
-| `/kv` | GET → list | 405, `Allow: GET` |
-| `/kv/<one segment>` | GET, PUT, PATCH → key handler | 405, `Allow: GET, PUT, PATCH` |
-| anything else | — | 404 |
+| `/kv` | GET → list | chi's 405: `Allow: GET`, empty body |
+| `/kv/{key}` (one non-empty segment) | GET, PUT, PATCH → key checks, then the handler | chi's 405: `Allow` lists GET, PUT, PATCH in any order, empty body |
+| anything else, including `/kv/` and `/kv/a/b` | — | 404 `not_found` (a custom chi NotFound handler) |
+
+A chi middleware logs one line per request (method, path, status, bytes, duration), using chi's
+response-writer wrapper to capture the status.
 
 ### Validation
 
@@ -131,19 +138,23 @@ answers HEAD, and decodes `%3A`):
   Nothing is percent-decoded.
 - **`ifVersion`**: parsed by hand from the raw query string, because Go's query parser silently drops
   malformed pairs. A bad value, a repeat or an overflow → 400.
-- **Body**: size limit (413) → valid UTF-8 → `json.Valid` → starts with `{` → nesting depth ≤ 64.
+- **Body**: size limit (413, chi `middleware.RequestSize` around `http.MaxBytesReader`) → valid UTF-8 →
+  `json.Valid` → starts with `{` → nesting depth ≤ 64 (counted with `json.Decoder.Token`).
 
 ### Responses
 
-- Success: the envelope is written by hand as `{"key":…,"value":` + stored bytes + `,"version":…}`.
-  `json.Marshal` is never used for it, because it would compact the stored value and escape `<`, `>`, `&`.
-- Errors: `{"error","message"}` (+ `currentVersion` on 409), encoded normally.
+- One writer for every JSON body: `json.Encoder` with `SetEscapeHTML(false)`. Plain `json.Marshal` would
+  rewrite `<`, `>`, `&` inside stored strings as `\u` escapes.
+- Success: `{"key","value","version"}`, with the stored bytes as a `json.RawMessage`. The encoder removes
+  whitespace outside strings and keeps everything else (R-FID-1).
+- Errors: `{"error","message"}` (+ `currentVersion` on 409).
 
 ---
 
 ## 4. Values and PATCH merge
 
-- **PUT** stores the body with surrounding whitespace trimmed, as raw bytes. GET returns those exact bytes.
+- **PUT** stores the body with surrounding whitespace trimmed, as raw bytes. GET returns them with whitespace
+  outside strings removed (R-FID-1).
 - **PATCH on a missing key** stores the delta's raw bytes, the same as PUT.
 - **PATCH on an existing key** merges inside the lock: decode only the top level of both sides into
   field → raw bytes, overlay the delta's fields, and encode back with HTML escaping off. Nested values are
@@ -210,15 +221,27 @@ A flag wins over env.
 
 ---
 
+## 7. Known limits
+
+- **Broken percent-escapes never reach the handler.** Go's HTTP server rejects a request line whose path
+  has an invalid escape (`/kv/%zz`, `/kv/a%`) before any handler runs. The client gets `400` as R-KEY-2 /
+  R-KEY-5 require, but with Go's plain-text body `400 Bad Request` instead of the R-ERR-1 JSON error.
+  Well-formed escapes (`%3A`, `%2F`) do reach the handler and get `400 invalid_key`. Fixing this would mean
+  replacing `net/http`'s request-line parsing.
+- **An unexpected store error** (one that valid input can't cause, such as a merge failing on bytes that
+  already passed validation) is answered with `500 internal_error`, which the contract doesn't list.
+
+---
+
 ## Decisions
 
 Full reasoning, alternatives, and pros and cons for each: [`decisions.md`](decisions.md).
 
 | # | Decision | Choice |
 |---|---|---|
-| [S1](decisions.md#s1-language--stack) | Language / stack | Go, standard library only; hand-written dispatcher instead of `ServeMux` |
+| [S1](decisions.md#s1-language--stack) | Language / stack | Go, standard library plus the chi router |
 | [S2](decisions.md#s2-how-to-store-values-and-lock) | How to store values and lock | Per-key mutex + `sync.Map` directory + immutable snapshot |
-| [S3](decisions.md#s3-value-representation) | Value representation | Raw bytes, not re-encoded; response built by hand |
+| [S3](decisions.md#s3-value-representation) | Value representation | Raw bytes stored; response written by `json.Encoder` (HTML escaping off) |
 | [S4](decisions.md#s4-what-runs-inside-the-lock) | What runs inside the lock | Only check → compute → publish |
 | [S5](decisions.md#s5-patch-merge) | PATCH merge | Decode top level only, overlay, re-encode |
 | [S6](decisions.md#s6-get-kv-listing-part-2) | `GET /kv` (part 2) | Stream inside `sync.Map.Range` |

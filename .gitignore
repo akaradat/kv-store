@@ -1,1 +1,5 @@
 .DS_Store
+bin/
+prep/
+.claude/settings.local.json
+__debug_bin*

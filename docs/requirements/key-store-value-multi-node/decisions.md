@@ -183,8 +183,10 @@ down.
 the node. Not working ❌. With the owner down, a bad body would get 503 instead of 400.
 
 **approach 2: router and node both validate, with shared code (use).**
-- The router runs the same dispatcher and validation as a node, from a package both binaries import. A bad
-  request is rejected at the router with exactly the error a single node would return.
+- The router runs the same validation as a node (`httpapi.ParseKey` / `ParseWrite` and the error writer), from a
+  package both binaries import. Each binary declares its own routes, so the router can later add routes a
+  node doesn't have. A bad request is rejected at the router with exactly the error a single node would
+  return.
 - The router reads the body (up to 1 MiB) to validate it, then forwards the same bytes untouched.
 - The node validates again, so it's still safe if called directly.
 - pros: identical errors with or without nodes, from one implementation.
