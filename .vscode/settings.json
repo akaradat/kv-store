@@ -1,0 +1,5 @@
+{
+  "go.buildTags": "e2e",
+  "go.testFlags": ["-race", "-v"],
+  "go.lintTool": "staticcheck"
+}

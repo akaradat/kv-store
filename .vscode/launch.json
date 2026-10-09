@@ -1,0 +1,39 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "kvnode",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/kvnode",
+      "args": [
+        "-addr",
+        ":7000",
+        "-node-id",
+        "node-1"
+      ]
+    },
+    {
+      "name": "kvrouter (nodes in Docker)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/kvrouter",
+      "args": [
+        "-addr",
+        ":7000",
+        "-cluster",
+        "${workspaceFolder}/cluster.json"
+      ]
+    },
+    {
+      "name": "Attach to make debug-*",
+      "type": "go",
+      "request": "attach",
+      "mode": "remote",
+      "host": "127.0.0.1",
+      "port": 2345
+    }
+  ]
+}
