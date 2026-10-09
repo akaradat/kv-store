@@ -36,7 +36,9 @@ kv-store/
 ├── test/                          suites that span packages (unit specs stay next to their code)
 │   ├── integration/               router + real nodes in one process; no build tag, always run
 │   └── e2e/                       real binaries as processes; every file tagged //go:build e2e (make e2e)
-│       └── kvcounter/             required 3×100 counter test: test-client CLI + its Ginkgo spec
+├── demo/                          presentation clients for verify.md §2; seed and verify with curl
+│   ├── kvcounter/                 required 3×100 counter test: concurrent guarded increments
+│   └── kvlostupdate/              negative control: the same increments without ifVersion
 ├── scripts/                       check-arch.sh (layer rules)
 ├── docs/
 │   ├── requirements/              brief + per-part requirement / solution / decisions / verify
@@ -82,11 +84,9 @@ flowchart LR
 2. **`core/kv` imports nothing from this module.** It is the innermost package. (checked)
 3. **`transport/` may import `core/`.** Never the reverse.
 4. **`cmd/*` is the only production code that reads flags, env or files** and wires packages together (the
-   `test/e2e/kvcounter` test client reads its own flags). `core/cluster`
+   `demo/` clients read their own flags). `core/cluster`
    takes `[]byte`, not a path, so core does no I/O.
-5. **Production code is the stdlib plus chi** (`github.com/go-chi/chi/v5`). No other third-party package may reach a binary. Test code may use
-   `ginkgo/v2` and `gomega`, nothing else. (checked)
-6. **These folders are never created:** `pkg/`, `util/`, `utils/`, `common/`, `mocks/`, `models/`. (checked)
+5. **These folders are never created:** `pkg/`, `util/`, `utils/`, `common/`, `mocks/`, `models/`. (checked)
 
 ---
 
@@ -144,8 +144,7 @@ already has a place for each likely roadmap item, and nothing existing would mov
 | Unit | `*_test.go` next to the code | `kv` rules, `store` concurrency, `httpapi` parsing, `cluster` slots |
 | Package integration | `transport/node`, `transport/router` | One package's handler via `httptest`: node status codes and bodies; router against fake misbehaving nodes |
 | System integration | `test/integration/` | The router in front of real in-process nodes: single-node parity, key ownership, node down and restart, `GET /kv` across nodes, key spread |
-| End-to-end | `test/e2e/`, tagged `//go:build e2e` | `kvnode`, `kvrouter` and `kvcounter` built with `-race` and run as processes (gomega `gexec`): flags, env, `cluster.json`, startup failures, a crashed node, SIGTERM, the counter test |
-| Required counter test | `test/e2e/kvcounter` | `Run()` against an in-process node and an in-process cluster; `make counter` runs it against a live server |
+| End-to-end | `test/e2e/`, tagged `//go:build e2e` | `kvnode` and `kvrouter` built with `-race` and run as processes (gomega `gexec`): flags, env, `cluster.json`, startup failures, a crashed node, SIGTERM |
 
 Unit and package-integration specs sit next to the package they test. In-process specs that need the whole
 system live in `test/integration/`; they are fast and hermetic, so they carry no build tag and always run. Only

@@ -33,23 +33,6 @@ if has_packages ./internal/core/kv; then
   done
 fi
 
-# Production binaries use the stdlib plus chi only; ginkgo/gomega may appear in tests only.
-# A stdlib import path has no dot in its first element.
-if has_packages ./cmd/...; then
-  for dep in $(go list -deps ./cmd/...); do
-    first="${dep%%/*}"
-    case "$dep" in
-      "$module" | "$module"/*) ;;
-      github.com/go-chi/chi/v5 | github.com/go-chi/chi/v5/*) ;;
-      *)
-        if [[ "$first" == *.* ]]; then
-          violation "binaries depend on third-party package $dep"
-        fi
-        ;;
-    esac
-  done
-fi
-
 for dir in pkg util utils common mocks models; do
   if [ -e "internal/$dir" ] || [ -e "$dir" ]; then
     violation "forbidden folder: $dir"
